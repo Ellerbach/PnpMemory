@@ -7,7 +7,7 @@ namespace PnpMemory
 {
     public  class diagnosticResults
     {
-        public Hashtable Map { get; set; }
+        public Hashtable Map { get; set; } = new Hashtable();
         public int Status { get; set; }
     }
 }

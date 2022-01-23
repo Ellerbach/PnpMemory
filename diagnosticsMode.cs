@@ -4,7 +4,6 @@ using System;
 
 namespace PnpMemory
 {
-
     public enum diagnosticsMode
     {
         minimal = 0,

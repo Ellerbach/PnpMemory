@@ -21,14 +21,14 @@ namespace PnpMemory
         // for all the properties
         private DateTime _started;
         private bool _enabled;
-        private TimeSpan _interval;
+        private int _interval;
 
         // For the twin version
         private long _twinVersion;
 
         public DeviceClient AzureIoT { get; internal set; }
 
-        public static rido_pnp_memmon CreateDevice(string iotName, string deviceName, string sasKey, MqttQoSLevel mqttQoSLevel = MqttQoSLevel.AtMostOnce, X509Certificate azureCert = null)
+        public static rido_pnp_memmon CreateDevice(string iotName, string deviceName, string sasKey, MqttQoSLevel mqttQoSLevel = MqttQoSLevel.AtLeastOnce, X509Certificate azureCert = null)
         {
             var client = new rido_pnp_memmon(iotName, deviceName, sasKey, mqttQoSLevel, azureCert);
             return client;
@@ -37,6 +37,11 @@ namespace PnpMemory
         private rido_pnp_memmon(string iotName, string deviceName, string sasKey, MqttQoSLevel mqttQoSLevel, X509Certificate azureCert = null)
         {
             AzureIoT = new DeviceClient(iotName, deviceName, sasKey, mqttQoSLevel, azureCert, ModelId);
+            if (!AzureIoT.Open())
+            {
+                throw new Exception("Can't connect to Azure IoT.");
+            }
+
             AzureIoT.TwinUpated += AzureTwinUpdated;
             AzureIoT.AddMethodCallback(getRuntimeStats);
             var twin = AzureIoT.GetTwin(new CancellationTokenSource(5000).Token);
@@ -46,23 +51,21 @@ namespace PnpMemory
 
         private void AzureTwinUpdated(object sender, TwinUpdateEventArgs e)
         {
-            if (e.Twin.Contains("started"))
-            {
-                _started = (DateTime)e.Twin["started"];
-            }
+            _twinVersion = e.Twin.Version;
 
             if (e.Twin.Contains("enabled"))
             {
                 _enabled = (bool)e.Twin["enabled"];
+                // Force reporting the value
+                enabled = _enabled;
             }
 
             if (e.Twin.Contains("interval"))
             {
-                // This won't work, need something to transform
-                _interval = (TimeSpan)e.Twin["interval"];
+                _interval = (int)e.Twin["interval"];
+                // Force reporting the value
+                interval = _interval;
             }
-
-            _twinVersion = e.Twin.Version;
         }
 
         private string getRuntimeStats(int rid, string payload)
@@ -84,16 +87,27 @@ namespace PnpMemory
         // If the paylod is as a string, then for enums, this is needed
         private static diagnosticsMode GetdiagnosticsModeFromString(string str) => str switch
         {
-            "minimal" => diagnosticsMode.minimal,
-            "complete" => diagnosticsMode.complete,
-            "full" => diagnosticsMode.full,
+            "0" => diagnosticsMode.minimal,
+            "1" => diagnosticsMode.complete,
+            "2" => diagnosticsMode.full,
             _ => throw new ArgumentOutOfRangeException(nameof(str))
         };
 
         #endregion
         #region Properties
 
-        public DateTime started { get => _started; }
+        public DateTime started
+        {
+            get => _started;
+            set
+            {
+                _started = value;
+                PropertyAcknowledge targetReport = new() { Version = (int)_twinVersion, Status = PropertyStatus.Completed, Description = String.Empty, Value = _started };
+                TwinCollection twin = new TwinCollection();
+                twin.Add("started", targetReport.BuildAcknowledge());
+                AzureIoT.UpdateReportedProperties(twin);
+            }
+        }
 
         public bool enabled
         {
@@ -108,7 +122,7 @@ namespace PnpMemory
             }
         }
 
-        public TimeSpan interval 
+        public int interval
         {
             get => _interval;
             set
