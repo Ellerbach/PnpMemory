@@ -1,4 +1,6 @@
+using nanoFramework.Azure.Devices.Client;
 using nanoFramework.Azure.Devices.Provisioning.Client;
+using nanoFramework.Hardware.Esp32;
 using nanoFramework.Networking;
 using nanoFramework.Runtime.Native;
 using PnpMemory;
@@ -9,57 +11,65 @@ using System.Threading;
 
 
 const string RegistrationID = "nanoMemMon";
-const string IdScope = "xxx";
+const string IdScope = "scopeid";
 const string DpsAddress = "global.azure-devices-provisioning.net";
-const string SasKey = "thelongkey";
+const string SasKey = "a valid sas key";
 const string Ssid = "ssid";
-const string Password = "wifipasswd";
+const string Password = "wifi password";
 
-Debug.WriteLine("Hello from nanoFramework!");
-
-// Give 60 seconds to the wifi join to happen
-CancellationTokenSource cs = new(60000);
-var success = WiFiNetworkHelper.ConnectDhcp(Ssid, Password, requiresDateTime: true, token: cs.Token);
-if (!success)
+try
 {
-    // Something went wrong, you can get details with the ConnectionError property:
-    Debug.WriteLine($"Can't connect to the network, error: {WiFiNetworkHelper.Status}");
-    if (WiFiNetworkHelper.HelperException != null)
+    Debug.WriteLine("Hello from nanoFramework!");
+
+    // Give 60 seconds to the wifi join to happen
+    CancellationTokenSource cs = new(60000);
+    var success = WiFiNetworkHelper.ConnectDhcp(Ssid, Password, requiresDateTime: true, token: cs.Token);
+    if (!success)
     {
-        Debug.WriteLine($"ex: {WiFiNetworkHelper.HelperException}");
+        // Something went wrong, you can get details with the ConnectionError property:
+        Debug.WriteLine($"Can't connect to the network, error: {WiFiNetworkHelper.Status}");
+        if (WiFiNetworkHelper.HelperException != null)
+        {
+            Debug.WriteLine($"ex: {WiFiNetworkHelper.HelperException}");
+        }
     }
-}
 
-var azureCA = new X509Certificate(Resource.GetBytes(Resource.BinaryResources.AzureRoot));
-var provisioning = ProvisioningDeviceClient.Create(DpsAddress, IdScope, RegistrationID, SasKey, azureCA);
-var myDevice = provisioning.Register(new CancellationTokenSource(60000).Token);
+    var azureCA = new X509Certificate(Resource.GetBytes(Resource.BinaryResources.AzureRoot));
+    var provisioning = ProvisioningDeviceClient.Create(DpsAddress, IdScope, RegistrationID, SasKey, azureCA);
+    var myDevice = provisioning.Register(new CancellationTokenSource(60000).Token);
 
-if (myDevice.Status != ProvisioningRegistrationStatusType.Assigned)
-{
-    Debug.WriteLine($"Registration is not assigned: {myDevice.Status}, error message: {myDevice.ErrorMessage}");
-    return;
-}
+    if (myDevice.Status != ProvisioningRegistrationStatusType.Assigned)
+    {
+        Debug.WriteLine($"Registration is not assigned: {myDevice.Status}, error message: {myDevice.ErrorMessage}");
+        return;
+    }
 
-rido_pnp_memmon memmon = rido_pnp_memmon.CreateDevice(myDevice.AssignedHub, myDevice.DeviceId, SasKey, azureCert: azureCA);
-memmon.RegisterCommandgetRuntimeStats(MyCommandgetRuntimeStats);
+    rido_pnp_memmon memmon = rido_pnp_memmon.CreateDevice(myDevice.AssignedHub, myDevice.DeviceId, SasKey, azureCert: azureCA);
+    memmon.RegisterCommandgetRuntimeStats(MyCommandgetRuntimeStats);
 
-memmon.started = DateTime.UtcNow;
+    memmon.started = DateTime.UtcNow;
 
 again:
-while (memmon.enabled)
-{
-    memmon.workingSet(nanoFramework.Runtime.Native.GC.Run(true));
-    Thread.Sleep((int)memmon.interval * 1000);
+    while (memmon.enabled)
+    {
+        memmon.workingSet(nanoFramework.Runtime.Native.GC.Run(true));
+        Thread.Sleep((int)memmon.interval * 1000);
+    }
+
+    while (!memmon.enabled)
+    {
+        Thread.Sleep(1000);
+    }
+
+    goto again;
 }
-
-while (!memmon.enabled)
+catch (Exception)
 {
-    Thread.Sleep(1000);
+    // We're using a global try catch to ensure that in all cases
+    // we will be able to go back to a safe situation
+    // The device will sleep a bit and wake up again
+    GoToSleep();
 }
-
-goto again;
-
-Thread.Sleep(Timeout.Infinite);
 
 diagnosticResults MyCommandgetRuntimeStats(int rid, diagnosticsMode diagnosticsMode)
 {
@@ -71,3 +81,9 @@ diagnosticResults MyCommandgetRuntimeStats(int rid, diagnosticsMode diagnosticsM
     return results;
 }
 
+void GoToSleep()
+{
+    // We go to sleep for 30 seconds and we will retry
+    Sleep.EnableWakeupByTimer(new TimeSpan(0, 0, 0, 30));
+    Sleep.StartDeepSleep();
+}
